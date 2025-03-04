@@ -15,15 +15,16 @@ app = Flask(__name__)
 # Configure CORS properly with specific origins and methods
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"],
+        "origins": "*",  # Allow all origins
         "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-        "supports_credentials": True
     }
 })
 
+
 # Configure upload folder
-UPLOAD_FOLDER = '/Users/nehal/KarishmaJewellerayWebsite/model/uploads'
+# Update paths for EC2
+UPLOAD_FOLDER = '/home/ec2-user/KarishmaBackend/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -78,7 +79,7 @@ def extract_components(results, image_path, save_dir="components"):
         image = Image.open(image_path).convert('RGB')  # Convert to RGB for consistency
         width, height = image.size  # Get dimensions
         
-        # Dictionary to store component counts and images
+        # Dictionary to store component counts and one representative image per category
         component_count = {}
         component_images = {}
         
@@ -123,23 +124,28 @@ def extract_components(results, image_path, save_dir="components"):
                     print(f"⚠️ Skipping empty component: {label}_{component_count[label]}")
                     continue
                 
-                # Save the cropped component
+                # Save the cropped component (all components are still saved)
                 component_filename = os.path.join(save_dir, f"{label}_{component_count[label]}.png")
                 cropped_component.save(component_filename, 'PNG')
                 
-                # Store the first detected image of each component type
+                # Store only the first detected image of each component type
                 if label not in component_images:
-                    # Convert to NumPy array for consistency with original code
-                    component_images[label] = np.array(cropped_component)
+                    component_images[label] = component_filename  # Store the file path
         
         return component_count, component_images
         
     except Exception as e:
         print(f"❌ Error extracting components: {str(e)}")
         return {}, {}
+    
+    
 @app.route("/test", methods=["GET"])
 def test():
     return jsonify({'message': 'Hello, World!'})
+
+@app.route("/test-ec2", methods=["GET"])
+def test():
+    return jsonify({'message': 'Hello, ec2 instance talking!'})
 
 @app.route('/segment', methods=['POST'])
 def segment_image():
@@ -152,12 +158,12 @@ def segment_image():
             return jsonify({'error': 'No selected file'}), 400
 
         if file and allowed_file(file.filename):
-            # Define all directory paths first
+            # Define directories
             output_folder = os.path.join(app.config['UPLOAD_FOLDER'], "output")
             components_dir = os.path.join(app.config['UPLOAD_FOLDER'], "components")
             temp_dir = os.path.join(app.config['UPLOAD_FOLDER'], "temp_for_zip")
 
-            # Clean up any existing directories first
+            # Clean up directories
             for directory in [UPLOAD_FOLDER, output_folder, components_dir, temp_dir]:
                 if os.path.exists(directory):
                     shutil.rmtree(directory)
@@ -172,36 +178,43 @@ def segment_image():
             model_path = "/Users/nehal/KarishmaJewellerayWebsite/model/yolov8-seg.torchscript"
             
             # Run inference
-            output_folder = os.path.join(app.config['UPLOAD_FOLDER'], "output")
             results, output_path = run_inference(model_path, image_path, output_folder)
 
-            # Modify the response to include both file and analysis data
             if results is not None and output_path:
                 # Extract components
-                components_dir = os.path.join(app.config['UPLOAD_FOLDER'], "components")
-                component_count, _ = extract_components(results, image_path, components_dir)
+                component_count, component_images = extract_components(results, image_path, components_dir)
 
-                # Create ZIP file
+                # Read the segmented image
+                with open(output_path, 'rb') as img_file:
+                    segmented_image = base64.b64encode(img_file.read()).decode('utf-8')
+
+                # Read one representative component image per category and encode to base64
+                component_images_base64 = {}
+                for label, component_path in component_images.items():
+                    with open(component_path, 'rb') as comp_file:
+                        component_images_base64[label] = base64.b64encode(comp_file.read()).decode('utf-8')
+
+                # Create ZIP file (still includes all components)
                 zip_path = os.path.join(app.config['UPLOAD_FOLDER'], "results.zip")
                 if os.path.exists(zip_path):
                     os.remove(zip_path)
                 shutil.make_archive(zip_path[:-4], 'zip', components_dir)
 
-                # Read the segmented image and encode it to base64
-                with open(output_path, 'rb') as img_file:
-                    segmented_image = base64.b64encode(img_file.read()).decode('utf-8')
-
-                # Read the ZIP file and encode it to base64
+                # Read ZIP file
                 with open(zip_path, 'rb') as zip_file:
                     zip_data = base64.b64encode(zip_file.read()).decode('utf-8')
 
-                # Create response with all data
+                # Create response
                 response = {
                     'analysis': {
                         'message': f"✅ Found {sum(component_count.values())} components across {len(component_count)} categories",
                         'components': component_count
                     },
                     'segmentedImage': f"data:image/png;base64,{segmented_image}",
+                    'componentImages': {
+                        label: f"data:image/png;base64,{data}" 
+                        for label, data in component_images_base64.items()
+                    },
                     'zipFile': {
                         'data': f"data:application/zip;base64,{zip_data}",
                         'filename': 'results.zip'
@@ -223,6 +236,8 @@ def segment_image():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ... (rest of the code remains the same)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
