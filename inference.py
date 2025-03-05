@@ -21,9 +21,7 @@ CORS(app, resources={
     }
 })
 
-
 # Configure upload folder
-# Update paths for EC2
 UPLOAD_FOLDER = '/home/ec2-user/KarishmaBackend/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -31,7 +29,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def run_inference(model_path, image_path, output_folder=None):
+def run_inference(model_path, image_path, output_folder=None, conf_threshold=0.01):
     """
     Run YOLOv8 segmentation inference on an image and save results
     """
@@ -46,8 +44,8 @@ def run_inference(model_path, image_path, output_folder=None):
         # Ensure output directory exists
         os.makedirs(output_folder, exist_ok=True)
         
-        # Run inference on the image
-        results = model(image_path, save=True, project=os.path.dirname(output_folder))
+        # Run inference on the image with provided confidence threshold
+        results = model(image_path, save=True, project=os.path.dirname(output_folder), conf=conf_threshold)
         
         # Find the output image in the latest run folder
         latest_run = sorted([f for f in os.listdir(os.path.dirname(output_folder)) 
@@ -137,15 +135,11 @@ def extract_components(results, image_path, save_dir="components"):
     except Exception as e:
         print(f"❌ Error extracting components: {str(e)}")
         return {}, {}
-    
-    
 @app.route("/test", methods=["GET"])
+
+
 def test():
     return jsonify({'message': 'Hello, World!'})
-
-@app.route("/test-ec2", methods=["GET"])
-def test():
-    return jsonify({'message': 'Hello, ec2 instance talking!'})
 
 @app.route('/segment', methods=['POST'])
 def segment_image():
@@ -157,6 +151,10 @@ def segment_image():
         if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
 
+        # Get confidence threshold from request, default to 0.01 if not provided
+        conf_threshold = float(request.form.get('confidence', 0.01))
+        print(f"📊 Received confidence threshold from frontend: {conf_threshold}")
+        
         if file and allowed_file(file.filename):
             # Define directories
             output_folder = os.path.join(app.config['UPLOAD_FOLDER'], "output")
@@ -175,11 +173,11 @@ def segment_image():
             file.save(image_path)
 
             # Model path
-            model_path = "/Users/nehal/KarishmaJewellerayWebsite/model/yolov8-seg.torchscript"
+            model_path = "/home/ec2-user/KarishmaBackend/yolov8-seg.torchscript"
             
-            # Run inference
-            results, output_path = run_inference(model_path, image_path, output_folder)
-
+            # Run inference with confidence threshold
+            results, output_path = run_inference(model_path, image_path, output_folder, conf_threshold)
+            
             if results is not None and output_path:
                 # Extract components
                 component_count, component_images = extract_components(results, image_path, components_dir)
@@ -236,8 +234,6 @@ def segment_image():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-# ... (rest of the code remains the same)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
