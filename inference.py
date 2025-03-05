@@ -136,10 +136,12 @@ def extract_components(results, image_path, save_dir="components"):
         print(f"❌ Error extracting components: {str(e)}")
         return {}, {}
 @app.route("/test", methods=["GET"])
-
-
 def test():
     return jsonify({'message': 'Hello, World!'})
+
+@app.route("/testec2", methods=["GET"])
+def testec2():
+    return jsonify({'message': 'Hello, ec2new One!'})
 
 @app.route('/segment', methods=['POST'])
 def segment_image():
